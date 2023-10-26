@@ -1,0 +1,167 @@
+import scrapy
+from scrapy.crawler import CrawlerProcess
+from scrapy.downloadermiddlewares.useragent import UserAgentMiddleware
+from scrapy.downloadermiddlewares.httpproxy import HttpProxyMiddleware
+import random
+import requests
+import re
+
+# Function to programmatically extract the reCAPTCHA site key from response URL
+def get_site_key(response_url):
+    # Use regular expressions to find the site key in the URL
+    match = re.search(r'googlekey=([^&]+)', response_url)
+    if match:
+        return match.group(1)
+    return None
+
+# Function to rotate User-Agent strings
+class RotateUserAgentMiddleware(UserAgentMiddleware):
+    user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Firefox/100.0.0.0 Safari/537.36',
+        # Add more User-Agent strings here as needed
+    ]
+    
+    def process_request(self, request, spider):
+        request.headers['User-Agent'] = random.choice(self.user_agents)
+
+# Function to rotate HTTP proxy servers
+class RotateHttpProxyMiddleware(HttpProxyMiddleware):
+    proxies = [
+        'http://proxy1.example.com:8080',
+        'http://proxy2.example.com:8080',
+        # Add more proxy server addresses here as needed
+    ]
+    
+    def process_request(self, request, spider):
+        request.meta['proxy'] = random.choice(self.proxies)
+
+class QuotesSpider(scrapy.Spider):
+    name = "quotes"
+    start_urls = ['http://quotes.toscrape.com/page/1/']
+    
+    def parse(self, response):
+        # Your scraping logic here
+        pass
+
+# Configure and run the spider
+process = CrawlerProcess(settings={
+    'RETRY_ENABLED': True,
+    'RETRY_TIMES': 2,
+    'DOWNLOADER_MIDDLEWARES': {
+        '__main__.RotateUserAgentMiddleware': 400,
+        '__main__.RotateHttpProxyMiddleware': 110,
+    },
+})
+
+class CaptchaMiddleware(object):
+    def process_response(self, request, response, spider):
+        if "captcha" in response.url:
+            captcha_solution = self.solve_captcha(response.url)
+            request.meta['captcha_solution'] = captcha_solution
+            return request
+        return response
+
+    def solve_captcha(self, url):
+        api_key = 'your_2captcha_api_key'
+        site_key = get_site_key(url)
+        if site_key:
+            captcha_id = requests.post("http://2captcha.com/in.php?key={}&method=userrecaptcha&googlekey={}&pageurl={}".format(
+                api_key, site_key, url)).text.split('|')[1]
+            captcha_solution = requests.get("http://2captcha.com/res.php?key={}&action=get&id={}".format(api_key, captcha_id)).text
+            return captcha_solution
+        else:
+            print("Site key extraction failed.")
+            return None
+
+class QuotesSpider(scrapy.Spider):
+    name = "quotes"
+    start_urls = ['http://quotes.toscrape.com/page/1/']
+    
+    def parse(self, response):
+        # Check robots.txt
+        if not self.allowed_by_robots(response.url):
+            raise CloseSpider('Blocked by robots.txt')
+
+        for quote in response.css('div.quote'):
+            yield {
+                'text': quote.css('span.text::text').get(),
+                'author': quote.css('span small::text').get(),
+            }
+        next_page = response.css('li.next a::attr(href)').get()
+        if next_page is not None:
+            yield response.follow(next_page, self.parse, errback=self.errback_method)
+    
+    def errback_method(self, failure):
+        self.logger.error(f"Error occurred: {repr(failure)}")
+        
+        # Handling network errors
+        if failure.check(scrapy.exceptions.TimeoutError):
+            self.logger.error("Network timeout error occurred.")
+        
+        # Handling captcha solving errors
+        elif failure.check(CaptchaSolvingError):
+            self.logger.error("Captcha solving error occurred.")
+            # You may choose to retry or take other actions here
+        
+        # Handling page parsing errors
+        elif failure.check(scrapy.exceptions.IgnoreRequest):
+            self.logger.error("Page parsing error occurred.")
+            # You may choose to skip the item or take other actions here
+        
+        # Handling missing next page links
+        elif failure.check(scrapy.exceptions.CrawlError):
+            self.logger.error("Missing next page link.")
+            # You may choose to handle this case as needed
+        
+        # Handling other errors
+        else:
+            self.logger.error("Other specific error occurred.")
+            # You can add additional handling for specific error types
+        
+        # Returning an empty dictionary to continue processing other items
+        return {}
+
+    def allowed_by_robots(self, url):
+        # Implement logic to check if the URL is allowed by robots.txt
+        # You can use the `robotparser` module to parse and check the rules
+        
+        # Example:
+        # rp = robotparser.RobotFileParser()
+        # rp.set_url(url)
+        # rp.read()
+        # return rp.can_fetch("*", url)
+        return True  # Allow by default for now
+
+# Configure and run the spider
+process = CrawlerProcess(settings={
+    'RETRY_ENABLED': True,
+    'RETRY_TIMES': 2,
+    'DOWNLOADER_MIDDLEWARES': {
+        '__main__.RotateUserAgentMiddleware': 400,
+        '__main__.RotateHttpProxyMiddleware': 110,
+        '__main__.CaptchaMiddleware': 600,
+    },
+    'FEEDS': {
+        'quotes.json': {
+            'format': 'json',
+            'encoding': 'utf8',
+            'store_empty': False,
+            'fields': None,
+            'indent': 4,
+            'item_export_kwargs': {
+                'export_empty_fields': True,
+            },
+        },
+    },
+    'LOG_ENABLED': True,  # Enable logging
+    'LOG_LEVEL': 'INFO',  # Set log level as needed
+    'AUTOTHROTTLE_ENABLED': True,  # Enable autothrottle for rate limiting
+    'AUTOTHROTTLE_START_DELAY': 1.0,  # Initial delay in seconds
+    'AUTOTHROTTLE_TARGET_CONCURRENCY': 1.0,  # Target request rate
+    'AUTOTHROTTLE_DEBUG': True,  # Enable autothrottle debugging
+    'ROBOTSTXT_OBEY': True,  # Obey robots.txt rules
+})
+
+process.crawl(QuotesSpider)
+process.start()
