@@ -1,4 +1,26 @@
+
+# Import the necessary libraries
 import scrapy
+import re
+from scrapy.crawler import CrawlerProcess
+import pandas as pd
+import random
+from scrapy.downloadermiddlewares.useragent import UserAgentMiddleware
+from scrapy.downloadermiddlewares.httpproxy import HttpProxyMiddleware
+import requests
+import pandas as pd
+
+# Load the dataset into a pandas dataframe
+df = pd.read_csv('./data/data.csv')
+
+# Clean the data
+
+# Remove rows with missing target, separate target from predictors
+X = train.dropna(axis=0, subset=[y], inplace=False)
+y = X[y]
+X.drop([y], axis=1, inplace=True)
+
+df.to_csv('./data/data_cleaned.csv')
 from scrapy.crawler import CrawlerProcess
 from scrapy.downloadermiddlewares.useragent import UserAgentMiddleware
 from scrapy.downloadermiddlewares.httpproxy import HttpProxyMiddleware
